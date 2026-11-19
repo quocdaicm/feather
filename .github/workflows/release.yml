@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - v*
+    paths:
+      - '**.zip'
   workflow_dispatch:
 
 jobs:
@@ -15,20 +17,67 @@ jobs:
         with:
           submodules: 'true'
 
+      - name: Apply uploaded zip files
+        run: |
+          shopt -s nullglob
+          # Zip lớn (nguyên project) áp trước, zip nhỏ (bản vá) áp sau
+          list=$(for z in *.zip; do printf '%s\t%s\n' "$(unzip -Z1 "$z" | wc -l | tr -d ' ')" "$z"; done | sort -t "$(printf '\t')" -k1,1nr -k2,2)
+          if [ -z "$list" ]; then
+            echo "Không có file zip ở thư mục gốc, build repo như hiện có."
+            exit 0
+          fi
+          printf '%s\n' "$list" | while IFS=$'\t' read -r n z; do
+            echo "::group::Áp dụng $z ($n file)"
+            tmp="$(mktemp -d)"
+            unzip -q -o "$z" -d "$tmp"
+            rm -rf "$tmp/__MACOSX"
+            root="$tmp"
+            entries=("$tmp"/* "$tmp"/.[!.]*)
+            if [ "${#entries[@]}" -eq 1 ] && [ -d "${entries[0]}" ]; then
+              case "$(basename "${entries[0]}")" in
+                Feather|NimbleKit|AltSourceKit|.github) ;;
+                *) root="${entries[0]}" ;;
+              esac
+            fi
+            # bỏ những thứ không được ghi đè (submodule, workflow, rác macOS)
+            rm -rf "$root/.git" "$root/.github" "$root/Zsign" "$root/IDeviceKitten"
+            find "$root" -name '.DS_Store' -delete
+            rm -f "$root"/*.zip
+            cp -R "$root"/. ./
+            echo "::endgroup::"
+          done
+          git status --short | head -50
+
       - name: Prepare dependencies (Xcode)
         run: |
           sudo xcode-select -s /Applications/Xcode_26.3.0.app
 
+      - name: Resolve Swift packages
+        run: |
+          ls /Applications | grep -i xcode || true
+          for i in 1 2 3; do
+            xcodebuild -resolvePackageDependencies -project Feather.xcodeproj -scheme Feather -skipPackagePluginValidation && break
+            echo "Resolve failed (attempt $i), retrying..."
+            sleep 5
+          done
+
       - name: Build
-        run: | 
+        run: |
           agvtool new-version -all $(git rev-parse HEAD)
-          make
+          make || { echo "Build failed, retrying once..."; make; }
 
       - name: Get Version
         id: get_version
         run: |
           VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" _build/Payload/*.app/Info.plist)
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Feather-ipa
+          path: packages/*
+          if-no-files-found: error
 
       - name: Create Release
         if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
