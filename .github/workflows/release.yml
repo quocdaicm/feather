@@ -64,13 +64,13 @@ jobs:
       - name: Build
         run: |
           agvtool new-version -all $(git rev-parse HEAD)
-          make || { echo "Build failed, retrying once..."; make; }
+          make iphoneos || { echo "Build failed, retrying once..."; make iphoneos; }
 
       - name: Get Version
         id: get_version
         run: |
-          VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" _build/Payload/*.app/Info.plist)
-          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          VERSION=$(grep -E '^FEATHER_PROJECT_VERSION' Feather.xcconfig | cut -d= -f2 | tr -d ' \r')
+          echo "VERSION=${VERSION:-0.0.0}" >> $GITHUB_ENV
 
       - name: Upload IPA
         uses: actions/upload-artifact@v4
